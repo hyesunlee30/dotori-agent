@@ -1,2 +1,4 @@
-# dotori-agent
-레거시 도토리를 모아 신뢰할 수 있는 차세대 코드로 가공하는 다람쥐 스택의 AI 마이그레이션 에이전트 🐿️ | LangGraph &amp; Qwen3.6-driven Code Migration Agent with Self-Correction Feedback Loop.
+# 🐿️ dotori-agent
+
+> **"레거시 도토리를 모아 신뢰할 수 있는 차세대 시스템으로 가공하는 자동화 마이그레이션 제품"**
+> **dotori-agent**는 복잡한 레거시 코드를 파악하고 명세서와 대조하여, 컴파일 및 테스트 검증까지 스스로 수행하는 **AI 기반 자가 수정(Self-Correction) 레거시 현대화 엔진**입니다.
