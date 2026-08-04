@@ -138,7 +138,7 @@ def run_both_tracks(
 
     # Backend conversion
     try:
-        backend_result = agent.convert("backend-api", ModuleType.BACKEND)
+        backend_result = agent.convert("backend-api", ModuleType.BACKEND, output_base=target_dir / "agent" / "backend")
         result.agent_backend = AgentResult(backend_result)
     except Exception as e:
         logger.error(f"Agent backend failed: {e}", exc_info=True)
@@ -151,7 +151,7 @@ def run_both_tracks(
 
     # Frontend conversion
     try:
-        frontend_result = agent.convert("frontend-ui", ModuleType.FRONTEND)
+        frontend_result = agent.convert("frontend-ui", ModuleType.FRONTEND, output_base=target_dir / "agent" / "frontend")
         result.agent_frontend = AgentResult(frontend_result)
     except Exception as e:
         logger.error(f"Agent frontend failed: {e}", exc_info=True)

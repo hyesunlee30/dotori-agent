@@ -1,0 +1,772 @@
+```typescript
+// src/features/evaluations/model/types.ts
+export type Evaluation = {
+  _id: string;
+  title: string;
+  evaluator: string;
+  evaluatee: string;
+  category: string;
+  score: number;
+  comments: string;
+  status: 'draft' | 'submitted' | 'completed';
+  dueDate: string;
+  period: {
+    start: string;
+    end: string;
+  };
+  createdAt: string;
+};
+
+export type EvaluationStats = {
+  byStatus: Array<{
+    status: string;
+    count: number;
+  }>;
+  byCategory: Array<{
+    _id: string;
+    count: number;
+    avgScore: number;
+  }>;
+  overallAverage: number;
+};
+
+export const CATEGORIES = [
+  { value: '역량', label: '역량' },
+  { value: '성과', label: '성과' },
+  { value: '태도', label: '태도' },
+  { value: '전문성', label: '전문성' },
+  { value: '커뮤니케이션', label: '커뮤니케이션' },
+  { value: '리더십', label: '리더십' },
+  { value: '문제해결력', label: '문제해결력' },
+  { value: '팀워크', label: '팀워크' },
+] as const;
+
+export const STATUS_MAP = {
+  draft: { color: 'default', text: '임시저장' },
+  submitted: { color: 'processing', text: '제출됨' },
+  completed: { color: 'success', text: '완료' },
+} as const;
+```
+
+```typescript
+// src/features/evaluations/api/evaluationApi.ts
+import { axiosInstance } from 'shared/api/axios';
+
+export const evaluationApi = {
+  getAll: (params = {}) => axiosInstance.get('/evaluations', { params }),
+  getById: (id: string) => axiosInstance.get(`/evaluations/${id}`),
+  create: (data: any) => axiosInstance.post('/evaluations', data),
+  update: (id: string, data: any) => axiosInstance.put(`/evaluations/${id}`, data),
+  delete: (id: string) => axiosInstance.delete(`/evaluations/${id}`),
+  getStats: () => axiosInstance.get('/evaluations/stats'),
+};
+```
+
+```typescript
+// src/features/evaluations/ui/EvaluationForm.tsx
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  Form,
+  Input,
+  Select,
+  InputNumber,
+  DatePicker,
+  Button,
+  Divider,
+  Typography,
+  Space,
+} from 'antd';
+import { ArrowLeftOutlined } from '@ant-design/icons';
+import dayjs from 'shared/lib/dayjs';
+import { evaluationApi } from '../api';
+import { CATEGORIES, STATUS_MAP } from '../model/types';
+import { usePageTranslation } from 'shared/lib/i18n';
+
+const { Title } = Typography;
+
+export const EvaluationForm = () => {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const isEdit = !!id;
+  const { t } = usePageTranslation();
+  const { message } = App.useApp();
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isEdit) {
+      fetchEvaluation();
+    }
+  }, [id]);
+
+  const fetchEvaluation = async () => {
+    setLoading(true);
+    try {
+      const res = await evaluationApi.getById(id);
+      const data = res.data.data;
+      form.setFieldsValue({
+        title: data.title,
+        evaluator: data.evaluator,
+        evaluatee: data.evaluatee,
+        category: data.category,
+        score: data.score,
+        comments: data.comments,
+        status: data.status,
+        dueDate: data.dueDate ? dayjs(data.dueDate) : null,
+        periodStart: data.period?.start ? dayjs(data.period.start) : null,
+        periodEnd: data.period?.end ? dayjs(data.period.end) : null,
+      });
+    } catch (err) {
+      message.error(t('error.load', '평가 데이터를 불러오는데 실패했습니다'));
+      navigate('/evaluations');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (values) => {
+    setSubmitting(true);
+    try {
+      const submitData = {
+        ...values,
+        dueDate: values.dueDate ? values.dueDate.toDate() : undefined,
+        period: {
+          start: values.periodStart ? values.periodStart.toDate() : undefined,
+          end: values.periodEnd ? values.periodEnd.toDate() : undefined,
+        },
+      };
+      if (!submitData.period.start) delete submitData.period.start;
+      if (!submitData.period.end) delete submitData.period.end;
+
+      if (isEdit) {
+        await evaluationApi.update(id, submitData);
+        message.success(t('success.update', '평가가 수정되었습니다'));
+      } else {
+        await evaluationApi.create(submitData);
+        message.success(t('success.create', '평가가 등록되었습니다'));
+      }
+      navigate('/evaluations');
+    } catch (err) {
+      message.error(isEdit 
+        ? t('error.update', '수정에 실패했습니다') 
+        : t('error.create', '등록에 실패했습니다')
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancel = () => {
+    navigate('/evaluations');
+  };
+
+  return (
+    <div className="page-container">
+      <div className="page-header">
+        <h1 className="page-title">
+          {isEdit ? t('title.edit', '평가 수정') : t('title.create', '평가 등록')}
+        </h1>
+        <Button icon={<ArrowLeftOutlined />} onClick={handleCancel}>
+          {t('button.back', '목록으로')}
+        </Button>
+      </div>
+
+      <div className="form-wrapper">
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleSubmit}
+          requiredMark="optional"
+        >
+          <div className="form-section">
+            <Title level={5} className="form-section-title">{t('section.basic', '기본 정보')}</Title>
+            <Form.Item
+              label={t('field.title', '제목')}
+              name="title"
+              rules={[{ required: true, message: t('error.required.title', '제목을 입력해주세요') }]}
+            >
+              <Input 
+                placeholder={t('placeholder.title', '평가 제목을 입력해주세요')} 
+                maxLength={200} 
+                showCount 
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('field.evaluator', '평가자')}
+              name="evaluator"
+              rules={[{ required: true, message: t('error.required.evaluator', '평가자를 입력해주세요') }]}
+            >
+              <Input 
+                placeholder={t('placeholder.evaluator', '평가자 이름을 입력해주세요')} 
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('field.evaluatee', '평가대상')}
+              name="evaluatee"
+              rules={[{ required: true, message: t('error.required.evaluatee', '평가대상을 입력해주세요') }]}
+            >
+              <Input 
+                placeholder={t('placeholder.evaluatee', '평가대상 이름을 입력해주세요')} 
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('field.category', '평가항목')}
+              name="category"
+              rules={[{ required: true, message: t('error.required.category', '평가항목을 선택해주세요') }]}
+            >
+              <Select 
+                placeholder={t('placeholder.category', '평가항목을 선택해주세요')} 
+                options={CATEGORIES}
+              />
+            </Form.Item>
+          </div>
+
+          <Divider />
+
+          <div className="form-section">
+            <Title level={5} className="form-section-title">{t('section.content', '평가 내용')}</Title>
+            <Form.Item
+              label={t('field.score', '점수')}
+              name="score"
+              rules={[{ required: true, message: t('error.required.score', '점수를 입력해주세요') }]}
+            >
+              <InputNumber
+                min={1}
+                max={100}
+                placeholder={t('placeholder.score', '1~100 점수를 입력해주세요')}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('field.status', '상태')}
+              name="status"
+              initialValue="draft"
+            >
+              <Select 
+                options={Object.entries(STATUS_MAP).map(([value, { text }]) => ({
+                  value,
+                  label: text,
+                }))}
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={t('field.comments', '코멘트')}
+              name="comments"
+            >
+              <Input.TextArea
+                rows={4}
+                placeholder={t('placeholder.comments', '평가 코멘트를 입력해주세요')}
+                maxLength={1000}
+                showCount
+              />
+            </Form.Item>
+          </div>
+
+          <Divider />
+
+          <div className="form-section">
+            <Title level={5} className="form-section-title">{t('section.schedule', '일정')}</Title>
+            <Form.Item label={t('field.dueDate', '기한')} name="dueDate">
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+
+            <Form.Item label={t('field.period', '평가 기간')}>
+              <Form.Item
+                name="periodStart"
+                noStyle
+                rules={[{ type: 'object', message: t('error.required.periodStart', '시작일을 선택해주세요') }]}
+              >
+                <DatePicker
+                  style={{ width: 'calc(50% - 8px)' }}
+                  format="YYYY-MM-DD"
+                  placeholder={t('placeholder.periodStart', '시작일')}
+                />
+              </Form.Item>
+              <span style={{ margin: '0 8px' }}>~</span>
+              <Form.Item
+                name="periodEnd"
+                noStyle
+                rules={[{ type: 'object', message: t('error.required.periodEnd', '종료일을 선택해주세요') }]}
+              >
+                <DatePicker
+                  style={{ width: 'calc(50% - 8px)' }}
+                  format="YYYY-MM-DD"
+                  placeholder={t('placeholder.periodEnd', '종료일')}
+                />
+              </Form.Item>
+            </Form.Item>
+          </div>
+
+          <Divider />
+
+          <Form.Item>
+            <Space>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={submitting}
+                size="large"
+              >
+                {isEdit ? t('button.update', '수정하기') : t('button.create', '등록하기')}
+              </Button>
+              <Button size="large" onClick={handleCancel}>
+                {t('button.cancel', '취소')}
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </div>
+    </div>
+  );
+};
+```
+
+```typescript
+// src/features/evaluations/ui/EvaluationList.tsx
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  Button,
+  Input,
+  Select,
+  Space,
+  Tag,
+  message,
+  Popconfirm,
+  Typography,
+  Row,
+  Col,
+  Statistic,
+} from 'antd';
+import {
+  PlusOutlined,
+  SearchOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
+import { AgGridReact } from 'ag-grid-react';
+import 'ag-grid-community/styles/ag-grid.css';
+import 'ag-grid-community/styles/ag-theme-alpine.css';
+import { evaluationApi } from '../api';
+import { CATEGORIES, STATUS_MAP } from '../model/types';
+import { usePageTranslation } from 'shared/lib/i18n';
+import { App } from 'antd';
+
+const { Text } = Typography;
+
+export const EvaluationList = () => {
+  const navigate = useNavigate();
+  const gridRef = useRef(null);
+  const { message: antdMessage } = App.useApp();
+  const { t } = usePageTranslation();
+
+  const [rowData, setRowData] = useState([]);
+  const [columnDefs, setColumnDefs] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [pagination, setPagination] = useState({ currentPage: 1, totalPages: 1, total: 0 });
+  const [searchText, setSearchText] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [stats, setStats] = useState(null);
+
+  const fetchEvaluations = async (page = 1) => {
+    setLoading(true);
+    try {
+      const params = {
+        page,
+        limit: 10,
+        sort: '-createdAt',
+      };
+      if (searchText) params.evaluatee = searchText;
+      if (categoryFilter) params.category = categoryFilter;
+      if (statusFilter) params.status = statusFilter;
+
+      const res = await evaluationApi.getAll(params);
+      setRowData(res.data.data || []);
+      setPagination({
+        currentPage: res.data.page,
+        totalPages: res.data.pages,
+        total: res.data.total,
+      });
+    } catch (err) {
+      antdMessage.error(t('error.load', '평가 데이터를 불러오는데 실패했습니다'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      const res = await evaluationApi.getStats();
+      setStats(res.data.data);
+    } catch (err) {
+      console.error('Stats fetch error', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchEvaluations(1);
+    fetchStats();
+  }, []);
+
+  const handleSearch = () => {
+    fetchEvaluations(1);
+  };
+
+  const handleReset = () => {
+    setSearchText('');
+    setCategoryFilter('');
+    setStatusFilter('');
+    fetchEvaluations(1);
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await evaluationApi.delete(id);
+      antdMessage.success(t('success.delete', '평가 데이터가 삭제되었습니다'));
+      fetchEvaluations(pagination.currentPage);
+    } catch (err) {
+      antdMessage.error(t('error.delete', '삭제에 실패했습니다'));
+    }
+  };
+
+  const getScoreColor = (score) => {
+    if (score >= 90) return '#52c41a';
+    if (score >= 80) return '#1890ff';
+    if (score >= 70) return '#faad14';
+    return '#ff4d4f';
+  };
+
+  const colDefs = [
+    {
+      headerName: 'No',
+      valueGetter: (params) => {
+        return (pagination.currentPage - 1) * 10 + params.node.rowIndex + 1;
+      },
+      width: 60,
+      checkboxSelection: false,
+      sortable: false,
+      filter: false,
+    },
+    {
+      headerName: t('column.title', '제목'),
+      field: 'title',
+      flex: 2,
+      sortable: true,
+      filter: true,
+      wrapText: true,
+      autoHeight: true,
+    },
+    {
+      headerName: t('column.evaluator', '평가자'),
+      field: 'evaluator',
+      flex: 1,
+      sortable: true,
+      filter: true,
+    },
+    {
+      headerName: t('column.evaluatee', '평가대상'),
+      field: 'evaluatee',
+      flex: 1,
+      sortable: true,
+      filter: true,
+    },
+    {
+      headerName: t('column.category', '항목'),
+      field: 'category',
+      width: 100,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params) => {
+        const cat = CATEGORIES.find((c) => c.value === params.value);
+        return cat ? <Tag color="blue">{cat.label}</Tag> : params.value;
+      },
+    },
+    {
+      headerName: t('column.score', '점수'),
+      field: 'score',
+      width: 80,
+      sortable: true,
+      filter: 'agNumberColumnFilter',
+      cellRenderer: (params) => (
+        <Text strong style={{ color: getScoreColor(params.value) }}>
+          {params.value}
+        </Text>
+      ),
+    },
+    {
+      headerName: t('column.status', '상태'),
+      field: 'status',
+      width: 90,
+      sortable: true,
+      filter: true,
+      cellRenderer: (params) => {
+        const s = STATUS_MAP[params.value] || { color: 'default', text: params.value };
+        return <Tag color={s.color}>{s.text}</Tag>;
+      },
+    },
+    {
+      headerName: t('column.dueDate', '기한'),
+      field: 'dueDate',
+      width: 120,
+      sortable: true,
+      valueFormatter: (params) => {
+        return params.value ? new Date(params.value).toLocaleDateString('ko-KR') : '-';
+      },
+    },
+    {
+      headerName: t('column.createdAt', '작성일'),
+      field: 'createdAt',
+      width: 120,
+      sortable: true,
+      valueFormatter: (params) => {
+        return params.value ? new Date(params.value).toLocaleDateString('ko-KR') : '-';
+      },
+    },
+    {
+      headerName: t('column.actions', '작업'),
+      width: 100,
+      sortable: false,
+      filter: false,
+      cellRenderer: (params) => (
+        <Space>
+          <Button
+            type="link"
+            icon={<EditOutlined />}
+            onClick={() => navigate(`/evaluations/${params.data._id}/edit`)}
+          >
+            {t('button.edit', '수정')}
+          </Button>
+          <Popconfirm
+            title={t('confirm.delete', '삭제하시겠습니까?')}
+            onConfirm={() => handleDelete(params.data._id)}
+            okText={t('button.delete', '삭제')}
+            cancelText={t('button.cancel', '취소')}
+          >
+            <Button type="link" danger icon={<DeleteOutlined />}>
+              {t('button.delete', '삭제')}
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div className="page-container">
+      <div className="page-header">
+        <h1 className="page-title">{t('title', '평가 관리')}</h1>
+        <Button
+          type="primary"
+          icon={<PlusOutlined />}
+          onClick={() => navigate('/evaluations/create')}
+        >
+          {t('button.create', '평가 등록')}
+        </Button>
+      </div>
+
+      {stats && (
+        <div className="stat-cards">
+          <div className="stat-card">
+            <div className="label">{t('stats.total', '총 평가 건수')}</div>
+            <div className="value">
+              {stats.byStatus?.reduce((sum, s) => sum + s.count, 0) || 0}
+            </div>
+          </div>
+          <div className="stat-card">
+            <div className="label">{t('stats.average', '평균 점수')}</div>
+            <div className="value">{stats.overallAverage?.toFixed(1) || 0}</div>
+          </div>
+          {stats.byCategory?.slice(0, 3).map((cat) => (
+            <div className="stat-card" key={cat._id}>
+              <div className="label">{cat._id} {t('stats.average', '평균')}</div>
+              <div className="value">{cat.avgScore?.toFixed(1) || 0}</div>
+              <div className="sub">{cat.count} {t('stats.count', '건')}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="filter-bar">
+        <Input
+          placeholder={t('search.placeholder', '평가대상 검색')}
+          prefix={<SearchOutlined />}
+          value={searchText}
+          onChange={(e) => setSearchText(e.target.value)}
+          onPressEnter={handleSearch}
+          style={{ width: 200 }}
+        />
+        <Select
+          placeholder={t('filter.category', '평가항목')}
+          allowClear
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+          options={CATEGORIES}
+          style={{ width: 140 }}
+        />
+        <Select
+          placeholder={t('filter.status', '상태')}
+          allowClear
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={Object.entries(STATUS_MAP).map(([value, { text }]) => ({
+            value,
+            label: text,
+          }))}
+          style={{ width: 120 }}
+        />
+        <Button icon={<SearchOutlined />} onClick={handleSearch}>
+          {t('button.search', '검색')}
+        </Button>
+        <Button icon={<ReloadOutlined />} onClick={handleReset}>
+          {t('button.reset', '초기화')}
+        </Button>
+      </div>
+
+      <div className="grid-wrapper">
+        <div
+          className="ag-theme-alpine"
+          style={{ height: 500, width: '100%' }}
+        >
+          <AgGridReact
+            ref={gridRef}
+            rowData={rowData}
+            columnDefs={colDefs}
+            loading={loading}
+            pagination={true}
+            paginationPageSize={10}
+            defaultColDef={{
+              resizable: true,
+              filter: true,
+              floatingFilter: true,
+            }}
+            localeText={{
+              nextPage: t('grid.nextPage', '다음 페이지'),
+              previousPage: t('grid.previousPage', '이전 페이지'),
+              rowsPerPage: t('grid.rowsPerPage', '행 수:'),
+              searchOoo: t('grid.search', '검색...'),
+              noMatches: t('grid.noMatches', '검색 결과가 없습니다'),
+            }}
+            animateRows={true}
+            rowSelection={'single'}
+            onGridReady={() => {}}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+```
+
+```typescript
+// src/shared/api/axios.ts
+import axios from 'axios';
+
+export const axiosInstance = axios.create({
+  baseURL: 'http://localhost:5000/api',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+```
+
+```typescript
+// src/app/App.tsx
+import React from 'react';
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+} from 'react-router-dom';
+import { ConfigProvider } from 'antd';
+import koKR from 'antd/locale/ko_KR';
+import { EvaluationList } from 'features/evaluations/ui/EvaluationList';
+import { EvaluationForm } from 'features/evaluations/ui/EvaluationForm';
+import './App.css';
+
+export const App = () => {
+  return (
+    <ConfigProvider locale={koKR}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Navigate to="/evaluations" replace />} />
+          <Route path="/evaluations" element={<EvaluationList />} />
+          <Route path="/evaluations/create" element={<EvaluationForm />} />
+          <Route path="/evaluations/:id/edit" element={<EvaluationForm />} />
+        </Routes>
+      </BrowserRouter>
+    </ConfigProvider>
+  );
+};
+```
+
+```typescript
+// src/shared/lib/dayjs.ts
+import dayjs from 'dayjs';
+
+export default dayjs;
+```
+
+```typescript
+// src/shared/lib/i18n.ts
+import { App } from 'antd';
+
+export const usePageTranslation = () => {
+  const { message } = App.useApp();
+  return {
+    t: (key: string, defaultValue: string) => {
+      // In a real implementation, this would use a translation library
+      return defaultValue;
+    },
+    message,
+  };
+};
+```
+
+```typescript
+// src/main.tsx
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { App } from './app/App';
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+```
+
+```typescript
+// tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "lib": ["DOM", "ES2020"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "moduleResolution": "node",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "features/*": ["src/features/*"],
+      "entities/*": ["src/entities/*"],
+      "shared/*": ["src/shared/*"]
+    }
+  },
+  "include": ["src"]
+}
+```

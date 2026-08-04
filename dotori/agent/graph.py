@@ -49,6 +49,7 @@ class AgentState:
     messages: list[dict] = field(default_factory=list)
     needs_correction: bool = False
     skills_injected: bool = False
+    output_base: str = ""
 
 
 def create_agent_graph():
@@ -176,6 +177,7 @@ def convert_node(state: AgentState) -> dict:
     parsed_data = state.get("parsed_data", {})
     skills = parsed_data.get("skills", {})
     prompts = skills.get("prompts", {})
+    output_base = state.get("output_base")
 
     # Build conversion prompt
     system_prompt = prompts.get("system_role", config.prompts.SYSTEM_ARCHITECT_ROLE)
@@ -204,9 +206,13 @@ def convert_node(state: AgentState) -> dict:
             "content": f"[Correction Required]\n{config.prompts.ERROR_CORRECTION_INSTRUCTION}\n\nError: {state['error_message']}",
         })
 
+    # Call LLM to generate converted code
+    converted_code = _call_llm(messages, output_base=output_base)
+
     return {
         "status": ConversionStatus.CONVERTING.value,
         "messages": messages,
+        "converted_code": converted_code,
     }
 
 
@@ -431,9 +437,6 @@ def _build_backend_conversion_prompt(parsed_data: dict, guide: str) -> str:
     prompt += f"Include: Entity, Repository, Service, Controller, DTO, Mapper\n"
 
     return prompt
-    prompt += f"Include: Entity, Repository, Service, Controller, DTO, Mapper\n"
-
-    return prompt
 
 
 def _build_frontend_conversion_prompt(parsed_data: dict, guide: str) -> str:
@@ -464,24 +467,190 @@ def _build_frontend_conversion_prompt(parsed_data: dict, guide: str) -> str:
     return prompt
 
 
+def _call_llm(messages: list[dict], output_base: Path = None):
+    """Call LLM API and parse the response into converted code files.
+    
+    Returns:
+        Dict mapping file path -> file content
+    """
+    llm = ChatOpenAI(
+        model=config.llm.MODEL_NAME,
+        openai_api_key=config.llm.api_key,
+        openai_api_base=config.llm.BASE_URL,
+        temperature=config.llm.TEMPERATURE,
+        max_tokens=config.llm.MAX_TOKENS,
+        top_p=config.llm.TOP_P,
+    )
+    
+    langchain_messages = []
+    for msg in messages:
+        if msg["role"] == "system":
+            langchain_messages.append(SystemMessage(content=msg["content"]))
+        elif msg["role"] == "user":
+            langchain_messages.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            langchain_messages.append(AIMessage(content=msg["content"]))
+    
+    response = llm.invoke(langchain_messages)
+    content = response.content
+    
+    # Parse LLM response to extract file paths and content
+    converted_code = _parse_llm_response(content)
+    
+    # Write converted files to output directory
+    _write_converted_files(converted_code, output_base=output_base)
+    
+    return converted_code
+
+
+def _parse_llm_response(content: str) -> dict:
+    """Parse LLM response to extract file paths and code content.
+    
+    Expected format:
+    ```
+    path/to/file.java
+    ```java
+    // code content
+    ```
+    """
+    import re
+    
+    converted_code = {}
+    
+    # Try to find code blocks with file path headers
+    # Pattern: file path on one line, then code block
+    path_pattern = re.compile(r'^([a-zA-Z0-9_/\-\.]+(?:\.(?:java|tsx|ts|json|gradle|xml|properties)))\s*$')
+    
+    lines = content.split('\n')
+    i = 0
+    current_path = None
+    current_code_lines = []
+    in_code_block = False
+    
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check for code block start
+        if line.strip().startswith('```'):
+            if not in_code_block:
+                in_code_block = True
+                # Try to get language from the fence line
+                lang = line.strip()[3:].strip()
+                i += 1
+                continue
+            else:
+                # End of code block - save the file
+                if current_path and current_code_lines:
+                    code = '\n'.join(current_code_lines).strip()
+                    if code:
+                        converted_code[current_path] = code
+                in_code_block = False
+                current_path = None
+                current_code_lines = []
+                i += 1
+                continue
+        
+        if in_code_block:
+            current_code_lines.append(line)
+        else:
+            # Check if this line looks like a file path
+            match = path_pattern.match(line.strip())
+            if match:
+                # Next line should be a code block
+                current_path = line.strip()
+        
+        i += 1
+    
+    # Handle case where code block wasn't closed
+    if current_path and current_code_lines and not in_code_block:
+        code = '\n'.join(current_code_lines).strip()
+        if code:
+            converted_code[current_path] = code
+    
+    # Fallback: if no paths found, treat entire response as one file
+    if not converted_code:
+        converted_code["converted_output"] = content.strip()
+    
+    return converted_code
+
+
+def _write_converted_files(converted_code: dict, output_base: Path = None):
+    """Write converted code files to the output directory."""
+    if output_base is None:
+        output_base = config.paths.TARGET_OUTPUT_DIR
+    elif isinstance(output_base, str):
+        output_base = Path(output_base)
+    
+    for file_path, content in converted_code.items():
+        # Clean up the file path
+        clean_path = file_path.strip().strip('`').strip()
+        
+        # Skip if it looks like a directory or non-file
+        if not clean_path or clean_path.startswith('#'):
+            continue
+        
+        # Determine full output path
+        if clean_path.startswith('/'):
+            full_path = Path(clean_path)
+        else:
+            full_path = output_base / clean_path
+        
+        # Create parent directories
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Write file
+        full_path.write_text(content, encoding='utf-8')
+        logger.info(f"Written: {full_path}")
+
+
 class ConversionAgent:
-    """High-level agent for legacy-to-modern conversion."""
+    """High-level agent for legacy-to-modern conversion.
+    
+    Product-level agent that:
+    1. Accepts parameter-based legacy directories
+    2. Parses legacy code structure
+    3. Converts using LLM with self-correction loop
+    4. Writes migrated output to specified directories
+    """
 
-    def __init__(self):
-        self.graph = create_agent_graph()
+    def __init__(self, legacy_backend_dir: Path = None, legacy_frontend_dir: Path = None,
+                 target_dir: Path = None):
+        """Initialize conversion agent with parameter-based paths.
+        
+        Args:
+            legacy_backend_dir: Path to legacy backend code
+            legacy_frontend_dir: Path to legacy frontend code
+            target_dir: Path for migrated output
+        """
         self.sessions: dict[str, Session] = {}
+        self.legacy_backend_dir = legacy_backend_dir or config.paths.LEGACY_BACKEND_DIR
+        self.legacy_frontend_dir = legacy_frontend_dir or config.paths.LEGACY_FRONTEND_DIR
+        self.target_dir = target_dir or config.paths.TARGET_OUTPUT_DIR
+        
+        # Build the LangGraph conversion graph
+        self.graph = create_agent_graph()
+        
+        # Create output directories
+        self.target_dir.mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (self.target_dir / "frontend").mkdir(parents=True, exist_ok=True)
 
-    def get_session(self, module: str) -> Session:
-        if module not in self.sessions:
-            self.sessions[module] = Session(module)
-        return self.sessions[module]
-
-    def convert(self, module: str, module_type: ModuleType) -> dict:
-        """Run the full conversion pipeline for a module."""
+    def convert(self, module: str, module_type: ModuleType, output_base: Path = None) -> dict:
+        """Run the full conversion pipeline for a module with self-correction loop.
+        
+        Args:
+            module: Module name (e.g., 'backend-api', 'frontend-ui')
+            module_type: ModuleType.BACKEND or ModuleType.FRONTEND
+            output_base: Output directory for converted files
+        
+        Returns:
+            Conversion result dict with success status
+        """
         initial_state = {
             "module": module,
             "module_type": module_type.value,
             "status": ConversionStatus.PENDING.value,
+            "output_base": str(output_base) if output_base else "",
         }
 
         # Set up hooks
@@ -510,3 +679,36 @@ class ConversionAgent:
                 "module": module,
                 "error": str(e),
             }
+
+    def convert_all(self, output_base: Path = None) -> dict[str, dict]:
+        """Convert all available legacy modules (backend + frontend).
+        
+        Args:
+            output_base: Base output directory for converted files
+        
+        Returns:
+            Dict mapping module name to conversion result
+        """
+        results = {}
+        base = output_base or self.target_dir
+        
+        # Convert backend if available
+        if self.legacy_backend_dir.exists():
+            backend_out = base / "backend"
+            result = self.convert("backend-api", ModuleType.BACKEND, output_base=backend_out)
+            results["backend"] = result
+            logger.info(f"Backend conversion: {result['status']}")
+        
+        # Convert frontend if available
+        if self.legacy_frontend_dir.exists():
+            frontend_out = base / "frontend"
+            result = self.convert("frontend-ui", ModuleType.FRONTEND, output_base=frontend_out)
+            results["frontend"] = result
+            logger.info(f"Frontend conversion: {result['status']}")
+        
+        return results
+
+    def get_session(self, module: str) -> Session:
+        if module not in self.sessions:
+            self.sessions[module] = Session(module)
+        return self.sessions[module]

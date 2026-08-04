@@ -252,7 +252,16 @@ def run_workflow_pipeline(
     target_dir: Path = None,
     llm_client: Any = None,
 ) -> PipelineResult:
-    """Run the full workflow pipeline with convenient API."""
+    """Run the full workflow pipeline with convenient API.
+    
+    Args:
+        legacy_dir: Path to legacy code directory (e.g., /repos/legacy)
+        target_dir: Path for migrated output (e.g., /repos/migrated)
+        llm_client: Optional LLM client for conversion
+    
+    Returns:
+        PipelineResult with status and task results
+    """
     legacy_dir = legacy_dir or config.paths.LEGACY_BACKEND_DIR.parent
     target_dir = target_dir or config.paths.TARGET_OUTPUT_DIR
 
@@ -272,3 +281,40 @@ def run_workflow_pipeline(
     result.frontend = pipeline.get_result("run_frontend_build")
 
     return result
+
+
+def run_multi_repo_pipeline(
+    legacy_dirs: list[Path],
+    target_dir: Path,
+    llm_client: Any = None,
+) -> dict[str, PipelineResult]:
+    """Run workflow pipeline for multiple legacy repositories.
+    
+    Args:
+        legacy_dirs: List of paths to legacy repository directories
+        target_dir: Base path for migrated output
+        llm_client: Optional LLM client for conversion
+    
+    Returns:
+        Dict mapping legacy dir name to PipelineResult
+    """
+    results = {}
+    
+    for legacy_dir in legacy_dirs:
+        # Use repo name as output subdirectory
+        repo_name = legacy_dir.name
+        repo_target = target_dir / repo_name
+        
+        result = run_workflow_pipeline(
+            legacy_dir=legacy_dir,
+            target_dir=repo_target,
+            llm_client=llm_client,
+        )
+        
+        results[repo_name] = result
+        logger.info(f"Pipeline result for {repo_name}: {result.status.value}")
+        
+        if result.errors:
+            logger.warning(f"  Errors: {result.errors}")
+    
+    return results

@@ -3,6 +3,7 @@ import sys
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,13 +12,25 @@ load_dotenv()
 # ==========================================
 # 1. Path Settings (Legacy Conversion)
 # ==========================================
-@dataclass(frozen=True)
+@dataclass
 class PathSettings:
     BASE_DIR: Path = Path(__file__).resolve().parent
-    LEGACY_BACKEND_DIR: Path = BASE_DIR.parent / "legacy" / "backend-api"
-    LEGACY_FRONTEND_DIR: Path = BASE_DIR.parent / "legacy" / "frontend-ui"
-    TARGET_OUTPUT_DIR: Path = BASE_DIR.parent / "converted"
+    LEGACY_BACKEND_DIR: Path = None
+    LEGACY_FRONTEND_DIR: Path = None
+    TARGET_OUTPUT_DIR: Path = None
     DOCS_DIR: Path = BASE_DIR.parent / "document" / "dev-note"
+    
+    # Multi-repo support: additional legacy directories
+    LEGACY_DIRS: list[Path] = field(default_factory=list)
+
+    def __post_init__(self):
+        # Set defaults only if not provided via parameters
+        if self.LEGACY_BACKEND_DIR is None:
+            object.__setattr__(self, 'LEGACY_BACKEND_DIR', self.BASE_DIR.parent / "legacy" / "backend-api")
+        if self.LEGACY_FRONTEND_DIR is None:
+            object.__setattr__(self, 'LEGACY_FRONTEND_DIR', self.BASE_DIR.parent / "legacy" / "frontend-ui")
+        if self.TARGET_OUTPUT_DIR is None:
+            object.__setattr__(self, 'TARGET_OUTPUT_DIR', self.BASE_DIR.parent / "converted")
 
     def validate_paths(self):
         self.DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -26,6 +39,11 @@ class PathSettings:
         if not self.LEGACY_FRONTEND_DIR.exists():
             logging.warning(f"Legacy frontend not found at {self.LEGACY_FRONTEND_DIR}")
         self.TARGET_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Validate multi-repo directories
+        for i, legacy_dir in enumerate(self.LEGACY_DIRS):
+            if not legacy_dir.exists():
+                logging.warning(f"Legacy repo {i+1} not found at {legacy_dir}")
 
 
 # ==========================================
@@ -33,7 +51,7 @@ class PathSettings:
 # ==========================================
 @dataclass(frozen=True)
 class LLMSettings:
-    MODEL_NAME: str = "qwen/qwen-3.6-35b-a3b"
+    MODEL_NAME: str = "qwen/qwen3-32b"
     BASE_URL: str = "https://openrouter.ai/api/v1"
     TEMPERATURE: float = 0.0
     MAX_TOKENS: int = 8192
@@ -186,13 +204,17 @@ BeyondF Intranet architecture and coding conventions.
 # ==========================================
 # 6. Global Config Context (Singleton)
 # ==========================================
-@dataclass(frozen=True)
+@dataclass
 class DotoriConfig:
-    paths: PathSettings = field(default_factory=PathSettings)
+    paths: PathSettings = None
     llm: LLMSettings = field(default_factory=LLMSettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
     conversion: ConversionSettings = field(default_factory=ConversionSettings)
     prompts: PromptSettings = field(default_factory=PromptSettings)
+
+    def __post_init__(self):
+        if self.paths is None:
+            object.__setattr__(self, 'paths', PathSettings())
 
     def setup_logging(self):
         level = logging.DEBUG if self.agent.ENABLE_DEBUG_LOGGING else logging.INFO
@@ -203,6 +225,41 @@ class DotoriConfig:
         )
 
 
+# ==========================================
+# 7. Config Factory (Parameter-Based)
+# ==========================================
+def create_config(
+    legacy_backend_dir: Optional[Path] = None,
+    legacy_frontend_dir: Optional[Path] = None,
+    target_output_dir: Optional[Path] = None,
+    legacy_dirs: Optional[list[Path]] = None,
+) -> DotoriConfig:
+    """Create a DotoriConfig with parameter-based paths.
+    
+    Args:
+        legacy_backend_dir: Path to legacy backend code (e.g., /repos/legacy/backend-api)
+        legacy_frontend_dir: Path to legacy frontend code (e.g., /repos/legacy/frontend-ui)
+        target_output_dir: Path for migrated output (e.g., /repos/migrated/backend)
+        legacy_dirs: Additional legacy repository directories to process
+    
+    Returns:
+        Configured DotoriConfig instance
+    """
+    paths = PathSettings(
+        LEGACY_BACKEND_DIR=legacy_backend_dir,
+        LEGACY_FRONTEND_DIR=legacy_frontend_dir,
+        TARGET_OUTPUT_DIR=target_output_dir,
+        LEGACY_DIRS=legacy_dirs or [],
+    )
+    
+    cfg = DotoriConfig(paths=paths)
+    cfg.paths.validate_paths()
+    cfg.setup_logging()
+    
+    return cfg
+
+
+# Default global config (uses hardcoded defaults)
 config = DotoriConfig()
 config.paths.validate_paths()
 config.setup_logging()
